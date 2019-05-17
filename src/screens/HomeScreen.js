@@ -1,5 +1,14 @@
 import React, {Component} from "react";
-import {FlatList, PixelRatio, StyleSheet, Text, TouchableOpacity, View} from "react-native";
+import {
+	ActivityIndicator,
+	FlatList,
+	PixelRatio,
+	RefreshControl,
+	StyleSheet,
+	Text,
+	TouchableOpacity,
+	View
+} from "react-native";
 import Link from "../components/link/Link";
 import {Query} from "react-apollo";
 import gql from "graphql-tag";
@@ -56,11 +65,14 @@ class HomeScreen extends Component {
 	constructor(props) {
 		super(props);
 
-		this.pagination = {
-			skip: 0,
-			first: MAX_ITEMS_PER_PAGE,
-			endOfList: false
-		}
+		this.endOfList = false;
+
+		this.state = {
+			refetching: false,
+			fetchingMore: false,
+		};
+
+		this.links = [];
 	}
 
 
@@ -102,25 +114,24 @@ class HomeScreen extends Component {
 		});
 	};
 
-	loadMoreLinks = (fetchMore) => {
-		if (this.pagination.endOfList) {
+	loadMoreLinks = (fetchMore, skip) => {
+		if (this.endOfList) {
 			return;
 		}
-		this.pagination.skip += MAX_ITEMS_PER_PAGE;
-		const {skip, first} = this.pagination;
 		fetchMore({
 			query: GET_ALL_LINKS_QUERY,
-			variables: {skip, first},
+			variables: {skip, MAX_ITEMS_PER_PAGE},
 			updateQuery: (prev, {fetchMoreResult}) => {
-				if (!fetchMoreResult || (fetchMoreResult.feed.links && fetchMoreResult.feed.links.length === 0)) {
-					this.pagination.skip -= MAX_ITEMS_PER_PAGE;
-					this.pagination.endOfList = true;
+				if (!fetchMoreResult) {
 					return prev;
+				} else if(fetchMoreResult.feed.links && fetchMoreResult.feed.links.length < MAX_ITEMS_PER_PAGE) {
+					this.endOfList = true;
 				}
+
 				return update(prev, {
 					feed: {
 						links: {
-							$push: [...fetchMoreResult.feed.links.map(link => ({...link, skip, first}))]
+							$push: [...fetchMoreResult.feed.links]
 						}
 					}
 				});
@@ -128,37 +139,82 @@ class HomeScreen extends Component {
 		});
 	};
 
+	renderFooterComponent = () => {
+		return (
+			<View style={styles.loadingMoreContainer}>
+				<ActivityIndicator size={"small"} color={"black"}/>
+			</View>
+		)
+	};
+
+	renderFirstTimeLoading = () => {
+		return (
+			<View style={styles.firstTimeLoadingContainer}>
+				<ActivityIndicator size={"large"} color={"black"}/>
+			</View>
+		)
+	};
+
 	render() {
 		console.log("Render flatlist!!");
 
-
-		const {skip, first} = this.pagination;
 		return (
 			<View style={styles.container}>
-				<Query query={GET_ALL_LINKS_QUERY} variables={{skip, first}}>
+				<Query query={GET_ALL_LINKS_QUERY} variables={{skip: 0, MAX_ITEMS_PER_PAGE}} notifyOnNetworkStatusChange={true}>
 					{
-						({error, loading, data, fetchMore, subscribeToMore}) => {
-
-							if (loading && !data.feed) {
-								return (<Text>Fetching</Text>)
-							}
-							if (error) {
-								return (<Text>Error: ${error.message}</Text>)
-							}
+						({error, loading, data, fetchMore, refetch, subscribeToMore, networkStatus}) => {
 							this.subcribeToNewLink(subscribeToMore);
-							const {links = {}} = data.feed;
-							return links && (
-								<FlatList style={styles.list} contentContainerStyle={styles.container} data={links ? links : []}
-								          renderItem={this.renderItem}
-								          keyExtractor={this.keyExtractor}
-								          ItemSeparatorComponent={this.renderItemSeparator}
-								          onEndReachedThreshold={0.5}
-								          onEndReached={() => this.loadMoreLinks(fetchMore)}
-								/>
-							)
+							console.log("Network status: ", networkStatus);
+							let links = [];
+							let firstTimeLoading = false;
+							let fetchingMore = false;
+							let refetching = false;
+							let ready = false;
+							if (networkStatus < 7) { //Loading
+								if (networkStatus === 1) {
+									firstTimeLoading = true;
+								} else if (networkStatus === 3) {
+									fetchingMore = true;
+								} else if (networkStatus === 4) {
+									refetching = true;
+								}
+							} else {
+								if (error) {
+									return (<Text>Error: ${error.message}</Text>)
+								}
+								ready = true;
+							}
+							if(firstTimeLoading) {
+								 return this.renderFirstTimeLoading();
+							}
+							else {
+								if(ready) {
+									this.links = data.feed.links || [];
+								}
+								return (
+									<FlatList style={styles.list} contentContainerStyle={styles.listContainer} data={this.links}
+									          renderItem={this.renderItem}
+									          keyExtractor={this.keyExtractor}
+									          ItemSeparatorComponent={this.renderItemSeparator}
+									          onEndReachedThreshold={0.5}
+									          onEndReached={() => {
+									          	!fetchingMore && this.loadMoreLinks(fetchMore, this.links.length);
+									          }}
+									          ListFooterComponent={fetchingMore ? this.renderFooterComponent : null}
+									          refreshControl={
+										          <RefreshControl
+											          refreshing={refetching}
+											          onRefresh={refetch}
+										          />
+									          }
+									          refreshing={refetching}
+									/>
+								)
+							}
 						}
 					}
 				</Query>
+
 				<View style={styles.footerContainer}>
 					<TouchableOpacity onPress={() => {
 						this.props.navigation.navigate("CreateLink");
@@ -174,13 +230,20 @@ class HomeScreen extends Component {
 }
 
 const styles = StyleSheet.create({
-	list: {},
 	container: {
 		backgroundColor: "white",
 		alignItems: "stretch",
 		justifyContent: "flex-start",
+		flex: 1
+	},
+	list: {
+		flex: 1
+	},
+	listContainer: {
 		paddingTop: 10,
-		paddingBottom: 74
+		alignItems: "stretch",
+		justifyContent: "flex-start",
+		// flex: 1
 	},
 	linksContainer: {
 		alignItems: "stretch",
@@ -193,12 +256,12 @@ const styles = StyleSheet.create({
 		marginVertical: 10
 	},
 	footerContainer: {
-		position: "absolute",
+		// position: "absolute",
 		paddingVertical: 10,
 		backgroundColor: "white",
-		left: 0,
-		right: 0,
-		bottom: 0
+		// left: 0,
+		// right: 0,
+		// bottom: 0
 	},
 	createMoreButtonContainer: {
 		backgroundColor: "blue",
@@ -211,6 +274,16 @@ const styles = StyleSheet.create({
 	createMoreButtonText: {
 		color: "white",
 		fontWeight: "bold"
+	},
+	firstTimeLoadingContainer: {
+		flex: 1,
+		alignItems: 'center',
+		justifyContent: "center"
+	},
+	loadingMoreContainer: {
+		alignItems: 'center',
+		justifyContent: "center",
+		padding: 10
 	}
 });
 

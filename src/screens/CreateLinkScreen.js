@@ -42,11 +42,14 @@ class CreateLinkScreen extends Component {
 
 	updateCache = (cache, {data: {post}}) => {
 		const data = cache.readQuery({query: GET_ALL_LINKS_QUERY});
-		const newPost = {...post, isDeleted: false}
+		const linkExists = data.feed.links.find(link => link.id === post.id);
+		if(linkExists) {
+			return;
+		}
 		const newData = update(data, {
 			feed: {
 				links: {
-					$push: [newPost]
+					$push: [post]
 				}
 			}
 		});
